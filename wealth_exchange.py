@@ -248,8 +248,8 @@ def main():
     high_skill_ratio = 0.2          
     high_skill_bonus = 2.0          
     
-    saving_base = 0.3               # 基礎儲蓄率 (預設存多少比例)
-    saving_slope = 0.1              # 階級儲蓄傾向
+    saving_base = 0.2               # 基礎儲蓄率 (預設存多少比例)
+    saving_slope = 0.2              # 階級儲蓄傾向
     saving_min = 0.1                # 儲蓄下限 (窮人保命錢)
     saving_max = 0.90               # 儲蓄上限 (富人投資極限)
     
