@@ -53,6 +53,31 @@ class Params:
     # 鄰居定義："moore"（8 宮格）或 "von_neumann"（上下左右 4 格）
     # moore 產生較平滑的板塊邊界；von_neumann 邊界較銳利
 
+    # ── 價格機制（price_enabled=True 時啟用）────────────────────────────────────
+    price_enabled: bool = False
+    # 啟用後新增房價陣列：富人入住推高地價，窮人若負擔不起會被強制驅逐（仕紳化）
+
+    price_floor: float = 0.5
+    # 地價下限（即使完全空置也不低於此值）
+
+    price_ceiling: float = 3.0
+    # 地價上限（富人大量聚集也不超過）
+
+    price_cbd_premium: float = 1.0
+    # 初始 CBD 溢價：市中心比邊緣貴多少（加在 price_floor 上）
+
+    price_appreciation_rate: float = 0.05
+    # 富人入住每步的直接漲幅；鄰近富人的空間外溢效果為此值的 50%
+
+    price_decay_rate: float = 0.02
+    # 空置或窮人入住每步的跌幅
+
+    income_limit_g1: float = 1.5
+    # Group1（窮人）能負擔的最高房價；超過即被強制搬離（不論鄰居是否滿意）
+
+    income_limit_g2: float = 99.0
+    # Group2（富人）的負擔上限（遠超 price_ceiling，幾乎不受限）
+
     def __post_init__(self):
         if self.cbd_gravity_g1 < 0:
             self.cbd_gravity_g1 = self.cbd_gravity
@@ -72,6 +97,27 @@ def init_grid(p: Params, seed: int = 7) -> np.ndarray:
     rng.shuffle(arr)
     return arr.reshape((p.size, p.size))
 
+def init_price(p: Params) -> np.ndarray:
+    """初始化地價陣列：市中心起始較貴，邊緣較便宜。"""
+    center_r = (p.size - 1) / 2.0
+    center_c = (p.size - 1) / 2.0
+    rows = np.arange(p.size)[:, None]
+    cols = np.arange(p.size)[None, :]
+    dist = np.sqrt((rows - center_r)**2 + (cols - center_c)**2)
+    cbd_gradient = np.clip(1.0 - dist / (p.size / 1.414), 0, 1)
+    return p.price_floor + p.price_cbd_premium * cbd_gradient
+
+def update_price(grid: np.ndarray, price: np.ndarray, p: Params) -> None:
+    """就地更新地價（in-place）。富人入住漲，空置/窮人跌，鄰近富人有外溢效果。"""
+    delta = np.where(grid == 2,  p.price_appreciation_rate,
+            np.where(grid == 1, -p.price_decay_rate * 0.3,
+                                -p.price_decay_rate))
+    # 鄰近富人的空間外溢：帶動周圍地價
+    kernel = np.array([[1, 1, 1], [1, 0, 1], [1, 1, 1]], dtype=float) / 8
+    neighbor_rich = convolve((grid == 2).astype(float), kernel, mode='wrap')
+    spillover = neighbor_rich * p.price_appreciation_rate * 0.5
+    price[:] = np.clip(price + delta + spillover, p.price_floor, p.price_ceiling)
+
 def compute_unhappy(grid: np.ndarray, p: Params) -> np.ndarray:
     """回傳與 grid 同形的 bool 陣列，True 代表該格居民不滿意（想搬家）。"""
     H, W = grid.shape
@@ -88,9 +134,9 @@ def compute_unhappy(grid: np.ndarray, p: Params) -> np.ndarray:
                            [1, 0, 1],
                            [1, 1, 1]], dtype=float)
 
-    same1        = convolve((grid == 1).astype(float), kernel, mode='constant', cval=0)
-    same2        = convolve((grid == 2).astype(float), kernel, mode='constant', cval=0)
-    occ_neighbors = convolve((grid != 0).astype(float), kernel, mode='constant', cval=0)
+    same1         = convolve((grid == 1).astype(float), kernel, mode='wrap')
+    same2         = convolve((grid == 2).astype(float), kernel, mode='wrap')
+    occ_neighbors = convolve((grid != 0).astype(float), kernel, mode='wrap')
 
     # 市中心容忍度加成：距離中心越近，有效門檻越低（最多降低 cbd_gravity）
     # 當 cbd_gravity >= threshold 時，中心格子永遠滿意，自然形成雜居區
@@ -110,14 +156,23 @@ def compute_unhappy(grid: np.ndarray, p: Params) -> np.ndarray:
     return unhappy1 | unhappy2
 
 def _do_moves(grid: np.ndarray, movers: np.ndarray, empty_pos: np.ndarray,
-              gravity: float, rng: np.random.Generator):
+              gravity: float, rng: np.random.Generator,
+              price: np.ndarray = None, income_limit: float = None):
     """
     對一個群體執行搬家動作。
+    price / income_limit 不為 None 時，只考慮負擔得起的空地。
     回傳（更新後的空位列表, 實際搬家人數）。
     搬走者釋放的舊位置會加回空位列表，供下一個群體使用。
     """
     if len(movers) == 0 or len(empty_pos) == 0:
         return empty_pos, 0
+
+    # 負擔能力過濾：只保留 price <= income_limit 的空地
+    if price is not None and income_limit is not None:
+        affordable = price[empty_pos[:, 0], empty_pos[:, 1]] <= income_limit
+        empty_pos = empty_pos[affordable]
+        if len(empty_pos) == 0:
+            return empty_pos, 0
 
     if gravity > 0:
         H, W = grid.shape
@@ -146,95 +201,140 @@ def _do_moves(grid: np.ndarray, movers: np.ndarray, empty_pos: np.ndarray,
     return remaining, n
 
 
-def step(grid: np.ndarray, p: Params, rng: np.random.Generator):
+def step(grid: np.ndarray, p: Params, rng: np.random.Generator,
+         price: np.ndarray = None):
+    # ── 1. 更新地價（若啟用）────────────────────────────────────────────────
+    if p.price_enabled and price is not None:
+        update_price(grid, price, p)
+
+    # ── 2. 計算需要搬家的人 ─────────────────────────────────────────────────
     unhappy = compute_unhappy(grid, p)
-    unhappy_pos = np.argwhere(unhappy)
-    empty_pos = np.argwhere(grid == 0)
 
-    total_unhappy = unhappy_pos.shape[0]
+    # 價格驅逐：Group1 若負擔不起當前格子，強制搬離（不論鄰居是否滿意）
+    priced_out = np.zeros(grid.shape, dtype=bool)
+    if p.price_enabled and price is not None:
+        priced_out = (grid == 1) & (price > p.income_limit_g1)
 
-    if total_unhappy == 0 or empty_pos.size == 0:
+    must_move   = unhappy | priced_out
+    must_move_pos = np.argwhere(must_move)
+    empty_pos   = np.argwhere(grid == 0)
+
+    total_unhappy = int(unhappy.sum())  # 回報原始不滿意數（不含被驅逐者）
+
+    if must_move_pos.shape[0] == 0 or empty_pos.size == 0:
         return grid, 0, total_unhappy
 
-    # 搬家阻力：不滿意的居民仍有 friction_cost 機率選擇忍耐不動
-    # 模擬房貸綁定、學區成本、交易稅等現實摩擦
-    will_move_mask = rng.random(total_unhappy) < (1.0 - p.friction_cost)
-    actual_movers = unhappy_pos[will_move_mask]
+    # ── 3. 搬家阻力（被驅逐者無條件搬，其他人有機率忍耐）──────────────────
+    is_priced_out = priced_out[must_move_pos[:, 0], must_move_pos[:, 1]]
+    will_move_mask = is_priced_out | (
+        rng.random(must_move_pos.shape[0]) < (1.0 - p.friction_cost)
+    )
+    actual_movers = must_move_pos[will_move_mask]
 
     if len(actual_movers) == 0:
         return grid, 0, total_unhappy  # 所有人都被阻力卡住（Gridlock）
 
     rng.shuffle(actual_movers)
 
-    # 分群搶地：Group2（富人）優先選市中心空地，Group1（窮人）再從剩餘中選
-    # 模擬富人購買力較強，能優先搶到精華地段
+    # ── 4. 分群搶地：富人優先，窮人只能選負擔得起的剩餘空地 ────────────────
     g2_mask   = np.array([grid[r, c] == 2 for r, c in actual_movers])
     g2_movers = actual_movers[g2_mask]
     g1_movers = actual_movers[~g2_mask]
 
-    empty_pos, n2 = _do_moves(grid, g2_movers, empty_pos, p.cbd_gravity_g2, rng)
-    empty_pos, n1 = _do_moves(grid, g1_movers, empty_pos, p.cbd_gravity_g1, rng)
+    price_g1 = price if (p.price_enabled and price is not None) else None
+    price_g2 = price if (p.price_enabled and price is not None) else None
+
+    empty_pos, n2 = _do_moves(grid, g2_movers, empty_pos, p.cbd_gravity_g2, rng,
+                               price=price_g2, income_limit=p.income_limit_g2)
+    empty_pos, n1 = _do_moves(grid, g1_movers, empty_pos, p.cbd_gravity_g1, rng,
+                               price=price_g1, income_limit=p.income_limit_g1)
 
     return grid, n1 + n2, total_unhappy
 
-def run(p: Params, seed: int = 7, animate: bool = True):
-    rng = np.random.default_rng(seed)
-    grid = init_grid(p, seed=seed)
-
+def _setup_axes(p: Params):
+    """建立圖形與座標軸，若啟用價格機制則左右並排。"""
     from matplotlib.colors import ListedColormap
-    # 格子顏色：0=空屋（黑）、1=Group1（藍綠）、2=Group2（金）
     cmap = ListedColormap(["#1e1e1e", "#20B2AA", "#FFD700"])
-    fig, ax = plt.subplots(figsize=(7, 7))
-    im = ax.imshow(grid, cmap=cmap, vmin=0, vmax=2, interpolation="nearest")
+    ncols = 2 if p.price_enabled else 1
+    fig, axes = plt.subplots(1, ncols, figsize=(7 * ncols, 7))
+    ax = axes[0] if p.price_enabled else axes
+    return fig, ax, axes, cmap
 
-    # CBD 影響範圍：虛線紅圈 + 中心十字
+def _draw_cbd(ax, p: Params):
     if p.cbd_gravity > 0:
         center = p.size / 2.0
-        circle = plt.Circle((center, center), p.size*0.2, color='red',
+        circle = plt.Circle((center, center), p.size * 0.2, color='red',
                              fill=False, linestyle='--', linewidth=2, alpha=0.5)
         ax.add_patch(circle)
         ax.plot(center, center, 'r+', markersize=12)
 
+def run(p: Params, seed: int = 7, animate: bool = True):
+    rng  = np.random.default_rng(seed)
+    grid = init_grid(p, seed=seed)
+    price = init_price(p) if p.price_enabled else None
+
+    fig, ax, axes, cmap = _setup_axes(p)
+    im = ax.imshow(grid, cmap=cmap, vmin=0, vmax=2, interpolation="nearest")
+    _draw_cbd(ax, p)
     ax.set_xticks([])
     ax.set_yticks([])
     title = ax.set_title("")
+
+    # 地價熱圖（右側，僅 price_enabled 時存在）
+    im_price = None
+    if p.price_enabled:
+        ax_p = axes[1]
+        im_price = ax_p.imshow(price, cmap='hot',
+                                vmin=p.price_floor, vmax=p.price_ceiling,
+                                interpolation="nearest")
+        plt.colorbar(im_price, ax=ax_p, fraction=0.046, pad=0.04, label='地價')
+        ax_p.set_xticks([])
+        ax_p.set_yticks([])
+        ax_p.set_title("地價熱圖")
 
     stats = {"step": 0, "moves": 0, "unhappy": 0}
 
     def update(frame):
         nonlocal grid
-        grid, moves, unhappy_n = step(grid, p, rng)
+        grid, moves, unhappy_n = step(grid, p, rng, price)
         stats["step"] += 1
-        stats["moves"] = moves
-        stats["unhappy"] = unhappy_n
 
         im.set_data(grid)
+        if im_price is not None:
+            im_price.set_data(price)  # price 已 in-place 更新
         title.set_text(
-            f"Step: {stats['step']} | Unhappy: {unhappy_n} | Moved: {moves} | Stuck: {unhappy_n - moves}"
+            f"Step: {stats['step']} | Unhappy: {unhappy_n} | Moved: {moves}"
         )
-        return [im, title]
+        return [im, title] + ([im_price] if im_price is not None else [])
 
     if animate:
         ani = animation.FuncAnimation(
             fig, update, frames=p.max_steps, interval=80, blit=False, repeat=False
         )
+        plt.tight_layout()
         plt.show()
         return ani
     else:
         for _ in range(p.max_steps):
-            grid, moves, unhappy_n = step(grid, p, rng)
+            grid, moves, unhappy_n = step(grid, p, rng, price)
             if unhappy_n == 0 or moves == 0:
                 break
-        plt.figure(figsize=(7,7))
-        plt.imshow(grid, cmap=cmap, vmin=0, vmax=2, interpolation="nearest")
-        if p.cbd_gravity > 0:
-            center = p.size / 2.0
-            plt.plot(center, center, 'r+', markersize=12)
-            circle = plt.Circle((center, center), p.size*0.2, color='red',
-                                 fill=False, linestyle='--', linewidth=2, alpha=0.5)
-            plt.gca().add_patch(circle)
-        plt.title(f"Final | th1={p.threshold_g1}, th2={p.threshold_g2}")
-        plt.axis("off")
+        ncols = 2 if p.price_enabled else 1
+        fig2, axes2 = plt.subplots(1, ncols, figsize=(7 * ncols, 7))
+        ax2 = axes2[0] if p.price_enabled else axes2
+        ax2.imshow(grid, cmap=cmap, vmin=0, vmax=2, interpolation="nearest")
+        _draw_cbd(ax2, p)
+        ax2.set_title(f"Final | th1={p.threshold_g1}, th2={p.threshold_g2}")
+        ax2.axis("off")
+        if p.price_enabled:
+            ax2_p = axes2[1]
+            im2_p = ax2_p.imshow(price, cmap='hot',
+                                  vmin=p.price_floor, vmax=p.price_ceiling,
+                                  interpolation="nearest")
+            plt.colorbar(im2_p, ax=ax2_p, fraction=0.046, pad=0.04, label='地價')
+            ax2_p.set_title("最終地價分布")
+            ax2_p.axis("off")
+        plt.tight_layout()
         plt.show()
         return grid
 
