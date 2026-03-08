@@ -18,7 +18,7 @@ from human_simulation import Params, init_grid, step
 plt.rcParams["font.sans-serif"] = ["PingFang TC", "Heiti TC", "Arial Unicode MS", "sans-serif"]
 plt.rcParams["axes.unicode_minus"] = False
 
-OUTPUT_DIR = "report_output"
+OUTPUT_DIR = "output"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 CMAP = ListedColormap(["#1e1e1e", "#20B2AA", "#FFD700"])
