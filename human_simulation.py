@@ -4,6 +4,10 @@ from matplotlib import animation
 from dataclasses import dataclass
 from scipy.ndimage import convolve
 
+# 設定中文字體（macOS）
+plt.rcParams['font.family'] = ['Arial Unicode MS', 'PingFang SC', 'Heiti TC', 'sans-serif']
+plt.rcParams['axes.unicode_minus'] = False  # 修正負號顯示
+
 @dataclass
 class Params:
     # ── 地圖設定 ──────────────────────────────────────────────────────────────
@@ -341,13 +345,18 @@ def run(p: Params, seed: int = 7, animate: bool = True):
 if __name__ == "__main__":
     p = Params(
         size=60,
-        empty_ratio=0.2,      # 20% 空屋，提供足夠搬家緩衝空間
-        group1_ratio=0.5,     # 兩族人口各佔一半
-        threshold_g1=0.65,    # 高門檻 → 外部強烈隔離（8鄰需 ≥6 個同類）
+        empty_ratio=0.05,          # 20% 空屋，提供足夠搬家緩衝空間
+        group1_ratio=0.5,         # 兩族人口各佔一半
+        threshold_g1=0.65,        # 高門檻 → 外部強烈隔離（8鄰需 ≥6 個同類）
         threshold_g2=0.65,
-        friction_cost=0.0,    # 無阻力：不滿意立刻行動
-        cbd_gravity=0.8,      # 0.8 > threshold 0.65 → 市中心永遠滿意，自然雜居
+        friction_cost=0.0,        # 無阻力：不滿意立刻行動
+        cbd_gravity=0.8,          # 0.8 > threshold 0.65 → 市中心永遠滿意，自然雜居
+        cbd_gravity_g1=0.2,       # 窮人較難搶市中心
+        cbd_gravity_g2=0.95,      # 富人強力搶市中心
         max_steps=500,
-        neighborhood="moore", # 8 宮格：板塊邊界平滑
+        neighborhood="moore",     # 8 宮格：板塊邊界平滑
+        price_enabled=True,       # 啟用仕紳化機制
+        price_cbd_premium=1.0,    # 市中心初始溢價
+        income_limit_g1=1.5,      # 窮人負擔上限（超過即被驅逐）
     )
     run(p, seed=7, animate=True)

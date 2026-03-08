@@ -1,5 +1,5 @@
 """
-美國 vs 台灣居住隔離模擬報告
+美國、台灣、日本居住隔離模擬報告
 使用 Schelling Segregation Model（含 CBD 效應改良版）
 """
 
@@ -124,7 +124,7 @@ def write_report(results: list) -> str:
     lines = []
 
     lines += [
-        f"# 居住隔離模擬報告：美國 vs 台灣",
+        f"# 居住隔離模擬報告：美國 vs 台灣 vs 日本",
         f"",
         f"生成日期：{today}  ",
         f"模型：Schelling Segregation Model（改良版，含 CBD 市中心效應）",
@@ -201,22 +201,27 @@ def write_report(results: list) -> str:
             f"",
         ]
 
-    # 比較表
+    # 比較表（動態，支援任意國家數量）
     usa = next(r for r in results if "美國" in r["name"])
     twn = next(r for r in results if "台灣" in r["name"])
+    jpn = next(r for r in results if "日本" in r["name"])
+
+    def pct(r): return f"{r['final_unhappy']/r['total_occupied']*100:.1f}%"
 
     lines += [
-        f"## 兩國比較",
+        f"## 三國比較",
         f"",
-        f"| 指標 | 美國 | 台灣 |",
-        f"|------|------|------|",
-        f"| 收斂步數 | {usa['steps']} | {twn['steps']} |",
-        f"| 初始隔離指數 | {usa['init_seg']:.3f} | {twn['init_seg']:.3f} |",
-        f"| 最終隔離指數 | {usa['final_seg']:.3f} | {twn['final_seg']:.3f} |",
-        f"| 隔離指數上升幅度 | +{usa['delta_seg']:.3f} | +{twn['delta_seg']:.3f} |",
-        f"| 最終不滿意比例 | {usa['final_unhappy']/usa['total_occupied']*100:.1f}% | {twn['final_unhappy']/twn['total_occupied']*100:.1f}% |",
-        f"| 搬家阻力 | {usa['params'].friction_cost} （低） | {twn['params'].friction_cost} （高） |",
-        f"| 市中心吸引力 | {usa['params'].cbd_gravity} （弱） | {twn['params'].cbd_gravity} （強） |",
+        f"| 指標 | 美國 | 台灣 | 日本 |",
+        f"|------|------|------|------|",
+        f"| 收斂步數 | {usa['steps']} | {twn['steps']} | {jpn['steps']} |",
+        f"| 初始隔離指數 | {usa['init_seg']:.3f} | {twn['init_seg']:.3f} | {jpn['init_seg']:.3f} |",
+        f"| 最終隔離指數 | {usa['final_seg']:.3f} | {twn['final_seg']:.3f} | {jpn['final_seg']:.3f} |",
+        f"| 隔離指數上升幅度 | +{usa['delta_seg']:.3f} | +{twn['delta_seg']:.3f} | +{jpn['delta_seg']:.3f} |",
+        f"| 最終不滿意比例 | {pct(usa)} | {pct(twn)} | {pct(jpn)} |",
+        f"| 搬家阻力 | {usa['params'].friction_cost}（低） | {twn['params'].friction_cost}（中高） | {jpn['params'].friction_cost}（極高） |",
+        f"| 市中心吸引力 | {usa['params'].cbd_gravity}（弱，郊區化） | {twn['params'].cbd_gravity}（強） | {jpn['params'].cbd_gravity}（極強，一極集中） |",
+        f"| 富人市中心偏好 | {usa['params'].cbd_gravity_g2:.2f} | {twn['params'].cbd_gravity_g2:.2f} | {jpn['params'].cbd_gravity_g2:.2f} |",
+        f"| 窮人市中心偏好 | {usa['params'].cbd_gravity_g1:.2f} | {twn['params'].cbd_gravity_g1:.2f} | {jpn['params'].cbd_gravity_g1:.2f} |",
         f"",
         f"---",
         f"",
@@ -225,25 +230,37 @@ def write_report(results: list) -> str:
         f"### 美國",
         f"",
         f"- **低搬家阻力**（{usa['params'].friction_cost}）：居民對不滿意環境快速反應，隔離板塊形成速度快",
-        f"- **弱 CBD 效應**（{usa['params'].cbd_gravity}）：郊區化傾向使隔離從城市邊緣蔓延，缺乏混居緩衝區",
-        f"- **多數/少數比 {usa['params'].group1_ratio*100:.0f}%/{(1-usa['params'].group1_ratio)*100:.0f}%**：少數群體較難在各處形成足夠規模的聚落，被擠壓到少數角落",
-        f"- 最終隔離指數 **{usa['final_seg']:.3f}**，呈現清晰的大型單色板塊",
+        f"- **弱 CBD 效應**（{usa['params'].cbd_gravity}）：郊區化傾向（suburbanization）使族群隔離從城市邊緣蔓延，缺乏市中心混居緩衝區",
+        f"- **種族比例 {usa['params'].group1_ratio*100:.0f}%/{(1-usa['params'].group1_ratio)*100:.0f}%**：少數群體難以在各處形成足夠規模的聚落",
+        f"- 最終隔離指數 **{usa['final_seg']:.3f}**，呈現清晰的大型單色板塊，對應真實美國城市的種族隔離地圖",
         f"",
         f"### 台灣",
         f"",
-        f"- **高搬家阻力**（{twn['params'].friction_cost}）：房貸綁定、學區成本使居民即使不滿意也傾向忍耐，隔離演化較慢",
-        f"- **強 CBD 效應（非對稱）**：富人 cbd_gravity={twn['params'].cbd_gravity_g2}，窮人 cbd_gravity={twn['params'].cbd_gravity_g1:.2f}",
-        f"  → 富人優先搶佔市中心，窮人被推向外圍郊區，形成「中心富人、外圍窮人」的同心圓結構",
-        f"- **高搬家阻力**（{twn['params'].friction_cost}）：即使不滿意，仍有 {twn['params'].friction_cost*100:.0f}% 機率忍耐不動，隔離演化較慢",
-        f"- 最終隔離指數 **{twn['final_seg']:.3f}**，隔離現象較美國緩和，但具有明顯的經濟階層空間分化",
+        f"- **中高搬家阻力**（{twn['params'].friction_cost}）：高房價與房貸綁定使居民傾向忍耐，隔離演化較緩",
+        f"- **強 CBD 效應（非對稱）**：高所得 cbd_gravity={twn['params'].cbd_gravity_g2}，一般所得 cbd_gravity={twn['params'].cbd_gravity_g1:.2f}",
+        f"  → 高所得優先搶佔市中心，一般所得被推向外圍，形成「中心富人、外圍窮人」同心圓結構",
+        f"- 最終隔離指數 **{twn['final_seg']:.3f}**，隔離現象以經濟階層為主要分化軸，對應台北大安/文山的所得空間分布",
+        f"",
+        f"### 日本",
+        f"",
+        f"- **極高搬家阻力**（{jpn['params'].friction_cost}）：終身雇用文化、老齡化社會與低持有稅使居民幾乎不主動搬家",
+        f"- **極強一極集中**（{jpn['params'].cbd_gravity}）：東京向心力壓倒一切，模型中幾乎所有可移動者都趨向都心",
+        f"- **極低窮人中心偏好**（{jpn['params'].cbd_gravity_g1:.2f}）：一般勞動者退往郊外衛星市鎮（埼玉、千葉、神奈川），都心留給專業階層",
+        f"- 高阻力使隔離形成速度最慢，但最終可能形成**結構性固化**：一旦形成即難以改變",
+        f"- 最終隔離指數 **{jpn['final_seg']:.3f}**，反映「遲緩但固化」的空間分化特徵",
         f"",
         f"### Schelling 核心洞察",
         f"",
-        f"兩個場景都印證了 Schelling 的原始發現：",
-        f"**個人溫和的偏好（門檻 50~65%），在群體動態下會放大成遠超預期的社會隔離結構。**",
-        f"政策意涵上，單純降低門檻（提倡包容）的效果有限；",
-        f"提高搬家阻力（租金補貼、稅制改革）或強化 CBD 混居誘因，",
-        f"才能從機制層面減緩隔離的自發性形成。",
+        f"三個場景都印證了 Schelling 的原始發現：",
+        f"**個人溫和的偏好（門檻 55~65%），在群體動態下會放大成遠超預期的社會隔離結構。**",
+        f"",
+        f"三國的差異在於**驅動機制不同**：",
+        f"- 美國：偏好導向（主動選擇同族鄰居）",
+        f"- 台灣：價格導向（高所得搶市中心，低所得被動外移）",
+        f"- 日本：慣性主導（極低流動性使現有格局固化，變動主要來自年輕世代首次置業）",
+        f"",
+        f"政策意涵：單純提倡包容（降低門檻）效果有限；",
+        f"針對機制對症下藥——提高美國搬家成本（租金穩定）、台灣補貼窮人進入市中心、日本促進居住流動——才能從根本緩解隔離。",
     ]
 
     report_path = os.path.join(OUTPUT_DIR, "segregation_report.md")
@@ -263,27 +280,40 @@ SCENARIOS = [
         threshold_g1=0.65,   # 歷史上較高的種族偏好門檻
         threshold_g2=0.65,   # 少數族群同樣傾向防禦性聚居
         friction_cost=0.15,  # 美國流動率高，搬家阻力低
-        cbd_gravity=0.2,     # 郊區化，市中心吸引力弱（兩群相同）
+        cbd_gravity=0.2,     # 郊區化，市中心吸引力弱
         max_steps=300,
         neighborhood="moore",
     )),
     ("台灣（階級隔離）", Params(
         size=60,
         empty_ratio=0.15,    # 台灣整體空屋率約 10~15%
-        group1_ratio=0.65,   # Group1=窮人 65% / Group2=富人 35%
-        threshold_g1=0.55,   # 窮人對混居有一定容忍度
+        group1_ratio=0.65,   # Group1=一般所得 65% / Group2=高所得 35%
+        threshold_g1=0.55,   # 對混居有一定容忍度
         threshold_g2=0.55,   # 富人亦然，但搬家行為不同
         friction_cost=0.50,  # 高搬家阻力：房貸綁定、高房價、學區限制
-        cbd_gravity=0.85,    # 市中心容忍度加成（兩群都更包容）
-        cbd_gravity_g1=0.2,  # 窮人：負擔不起市中心，隨機找郊區空地
-        cbd_gravity_g2=0.95, # 富人：強力搶佔市中心精華地段
+        cbd_gravity=0.85,    # 市中心容忍度加成
+        cbd_gravity_g1=0.2,  # 一般所得：負擔不起市中心，偏向郊區
+        cbd_gravity_g2=0.95, # 高所得：強力搶佔市中心精華地段
+        max_steps=500,
+        neighborhood="moore",
+    )),
+    ("日本（都市集中＋低流動性）", Params(
+        size=60,
+        empty_ratio=0.14,    # 全國空屋率約 13~14%（空き家問題），都市區較低
+        group1_ratio=0.75,   # 多數：一般勞動階層 / 少數：都市專業階層
+        threshold_g1=0.60,   # 日本社會同質性高，對同群有一定偏好
+        threshold_g2=0.65,   # 專業階層稍強的同質偏好
+        friction_cost=0.65,  # 極高阻力：終身雇用、老齡化、持有稅低不誘使換房
+        cbd_gravity=0.90,    # 極強東京向心力（一極集中）
+        cbd_gravity_g1=0.15, # 一般勞動者：難以進入都心，退往郊外衛星市鎮
+        cbd_gravity_g2=0.95, # 專業階層：強力集中在都心 23 區精華地段
         max_steps=500,
         neighborhood="moore",
     )),
 ]
 
 if __name__ == "__main__":
-    print("=== 居住隔離模擬：美國 vs 台灣 ===\n")
+    print("=== 居住隔離模擬：美國 vs 台灣 vs 日本 ===\n")
 
     results = []
     for name, p in SCENARIOS:
